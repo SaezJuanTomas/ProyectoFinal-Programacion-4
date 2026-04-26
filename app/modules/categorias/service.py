@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlmodel import Session, func, select
+from sqlmodel import Session
 
 from app.models import Categoria
 from app.modules.catalogo.unit_of_work import CatalogUnitOfWork
@@ -43,17 +43,9 @@ class CategoriaService:
 
     def get_all(self, offset: int = 0, limit: int = 20) -> CategoriaList:
         """Obtener todas las categorías (no eliminadas)."""
-        items = self._session.exec(
-            select(Categoria)
-            .where(Categoria.deleted_at.is_(None))
-            .offset(offset)
-            .limit(limit)
-        ).all()
-        total = self._session.exec(
-            select(func.count())
-            .select_from(Categoria)
-            .where(Categoria.deleted_at.is_(None))
-        ).one()
+        with CatalogUnitOfWork(self._session) as uow:
+            items = uow.categorias.get_active_paginated(offset=offset, limit=limit)
+            total = uow.categorias.count_active()
         return CategoriaList(data=items, total=total)
 
     def get_by_id(self, categoria_id: int) -> CategoriaPublic:

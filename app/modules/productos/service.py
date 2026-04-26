@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlmodel import Session, func, select
+from sqlmodel import Session
 
-from app.models import Categoria, Producto, ProductoCategoria, ProductoIngrediente
+from app.models import Producto
 from app.modules.catalogo.unit_of_work import CatalogUnitOfWork
 from app.modules.productos.schemas import (
     ProductoCreate,
@@ -83,23 +83,9 @@ class ProductoService:
             uow.productos.add(producto)
 
             if data.categoria_id is not None:
-                uow._session.add(
-                    ProductoCategoria(
-                        producto_id=producto.id,
-                        categoria_id=data.categoria_id,
-                        es_principal=True,
-                    )
-                )
+                uow.productos.set_categoria_principal(producto.id, data.categoria_id)
 
-            for ing_id in data.ingrediente_ids:
-                uow._session.add(
-                    ProductoIngrediente(
-                        producto_id=producto.id,
-                        ingrediente_id=ing_id,
-                        es_removible=True,
-                        es_opcional=False,
-                    )
-                )
+            uow.productos.set_ingredientes(producto.id, data.ingrediente_ids)
 
             uow._session.flush()
             uow._session.refresh(producto)
@@ -111,18 +97,12 @@ class ProductoService:
 
     def get_all(self, offset: int = 0, limit: int = 20) -> ProductoList:
         """Obtener todos los productos (no eliminados)."""
-        items = self._session.exec(
-            select(Producto)
-            .where(Producto.deleted_at.is_(None))
-            .offset(offset)
-            .limit(limit)
-        ).all()
-        total = self._session.exec(
-            select(func.count())
-            .select_from(Producto)
-            .where(Producto.deleted_at.is_(None))
-        ).one()
-        return ProductoList(data=[self._to_public(item) for item in items], total=total)
+        with CatalogUnitOfWork(self._session) as uow:
+            items = uow.productos.get_active_paginated(offset=offset, limit=limit)
+            total = uow.productos.count_active()
+            # Convertir dentro del contexto para evitar lazy-load con sesión cerrada.
+            data = [self._to_public(item) for item in items]
+        return ProductoList(data=data, total=total)
 
     def get_by_id(self, producto_id: int) -> ProductoPublic:
         """Obtener producto por ID."""
@@ -168,16 +148,7 @@ class ProductoService:
                         detail=f"Categoria con ID {data.categoria_id} no existe",
                     )
 
-                uow._session.query(ProductoCategoria).filter(
-                    ProductoCategoria.producto_id == producto.id
-                ).delete()
-                uow._session.add(
-                    ProductoCategoria(
-                        producto_id=producto.id,
-                        categoria_id=data.categoria_id,
-                        es_principal=True,
-                    )
-                )
+                uow.productos.set_categoria_principal(producto.id, data.categoria_id)
 
             # Actualizar ingredientes si se proporciona
             if data.ingrediente_ids is not None:
@@ -189,18 +160,7 @@ class ProductoService:
                             detail=f"Ingrediente con ID {ing_id} no existe",
                         )
 
-                uow._session.query(ProductoIngrediente).filter(
-                    ProductoIngrediente.producto_id == producto.id
-                ).delete()
-                for ing_id in data.ingrediente_ids:
-                    uow._session.add(
-                        ProductoIngrediente(
-                            producto_id=producto.id,
-                            ingrediente_id=ing_id,
-                            es_removible=True,
-                            es_opcional=False,
-                        )
-                    )
+                uow.productos.set_ingredientes(producto.id, data.ingrediente_ids)
 
             producto.updated_at = datetime.now(timezone.utc)
             uow.productos.add(producto)

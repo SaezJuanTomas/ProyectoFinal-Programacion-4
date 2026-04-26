@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlmodel import Session, func, select
+from sqlmodel import Session
 
 from app.models import Ingrediente
 from app.modules.catalogo.unit_of_work import CatalogUnitOfWork
@@ -42,17 +42,9 @@ class IngredienteService:
 
     def get_all(self, offset: int = 0, limit: int = 20) -> IngredienteList:
         """Obtener todos los ingredientes (no eliminados)."""
-        items = self._session.exec(
-            select(Ingrediente)
-            .where(Ingrediente.deleted_at.is_(None))
-            .offset(offset)
-            .limit(limit)
-        ).all()
-        total = self._session.exec(
-            select(func.count())
-            .select_from(Ingrediente)
-            .where(Ingrediente.deleted_at.is_(None))
-        ).one()
+        with CatalogUnitOfWork(self._session) as uow:
+            items = uow.ingredientes.get_active_paginated(offset=offset, limit=limit)
+            total = uow.ingredientes.count_active()
         return IngredienteList(data=items, total=total)
 
     def get_by_id(self, ingrediente_id: int) -> IngredientePublic:
